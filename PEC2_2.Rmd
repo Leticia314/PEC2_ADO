@@ -1,0 +1,281 @@
+---
+title: "Análisis de datos ómicos - PEC2"
+author: "Leticia Rodríguez Montes"
+date: "1/6/2020"
+output:
+  pdf_document:
+    df_print: paged
+    toc: yes
+    toc_depth: 4
+  html_document:
+    df_print: paged
+    toc: yes
+    toc_depth: '4'
+---
+## 1) Abstract
+La tiroides juega un papel clave en la producción de hormonas que regulan el metabolismo del ser humano. Tras analizar las diferencias en expresión génica entre tres grupos de muestras de pacientes (sin infiltrados (NIT), con pequeños infiltrados (SFI) o con infiltrados extensos(ELI)), hemos llegado a la conclusión de que no parece que haya relación entre el perfil transcripcional de estas muestras y su nivel de infiltación.
+
+## 2) Objetivos
+La tiroides es una glándula endocrina que juega un papel fundamental en la producción de hormonas que regulan el metabolismo en el ser humano. Algunos de los trastornos mejor estudiados vinculados a esta glándula son el hipotiroidismo, hipertiroidismo o algunas afecciones autoimunes como la enfermedad de Graves o la enfermedad de Hashimoto.
+
+El objetivo de este estudio es comparar el efecto de diferentes tipos de infiltración en la tiroides de humanos. Las muestras utilizadas proceden del conjunto de datos GTEx (Genotype-Tissue Expression). Este proyecto pretende ser un gran recurso para que la comunidad científica pueda estudiar la regulación y expresión génica en humanos y su relación con la variación genética. El portal del proyecto contiene una enorme cantidad de muestras de origen humano de multitud de tejidos y diferentes edades, razas y sexos que han sido rigurosamente genotipadas. En este caso en particular estamos utilizando muestras de tiroides que están clasificadas atendiendo a su nivel de infiltración de la siguiente manera:
+
+• Not infiltrated tissues (NIT): 236 samples
+• Small focal infiltrates (SFI): 42 samples
+• Extensive lymphoid infiltrates (ELI): 14 samples.
+
+## 3) Materiales y métodos
+
+### 3.1) Obtención de datos
+Los datos utilizados en este estudio proceden del portal GTEx (https://www.gtexportal.org/home/documentationPage). En este set de datos hay un total de 292 muestras pertenecientes a tres grupos:
+
++ Not infiltrated tissues (NIT): 236 muestras.
++ Small focal infiltrates (SFI): 42 muestras.
++ Extensive lymphoid infiltrates (ELI): 14 muestras.
+
+A partir de este set de datos se tomaron 10 muestras aleatorias de cada uno de los grupos utilizando la función "sample":
+
+### 3.2) Muestreo aleatorio
+```{r warning=FALSE, message=FALSE}
+#Cargar datos
+library(readr)
+library(tidyverse)
+dir <- paste0("C:/Users/Leticia/Desktop/MSc Systems Biology/UOC/Análisis de datos ómicos/",
+"PEC2/archivos targets y counts/")
+targets <- read_csv(paste0(dir, "targets.csv"))
+counts <- read.csv(paste0(dir, "counts.csv"), sep = ";", header=TRUE, row.names = 1)
+library("dplyr")
+
+library(edgeR)
+
+set.seed(1221)
+
+samples <- c(sample(targets$Sample_Name[targets$Group=="NIT"], size=10, replace = FALSE),
+             sample(targets$Sample_Name[targets$Group=="SFI"], size=10, replace = FALSE), 
+             sample(targets$Sample_Name[targets$Group=="ELI"], size=10, replace = FALSE))
+
+samples_targets <- targets[targets$Sample_Name %in% samples,]
+samples_targets$Sample_Name <- gsub("-", ".", samples_targets$Sample_Name)
+samples <- gsub("-", ".", samples)
+
+samples_counts <- counts[,samples]
+
+```
+Por lo tanto finalmente nuestro conjunto de datos cuenta con:
+
++ 10 muestras de "Not infiltrated tissues" (**NIT**)
++ 10 muestras de "Small focal infiltrates" (**SFI**)
++ 10 muestras de "Extensive lymphoid infiltrates" (**ELI**)
+
+### 3.3) Prefiltrado
+Con nuestras 30 muestras ya seleccionadas se construyó un objeto DGEList (con la función DGEList del paquete "edgeR").
+Teniendo en cuenta que muchos genes presentan un número de conteos muy bajos se ha decidido quitar las filas en las que los conteos por millón (cpm) son inferiores a 1 en al menos 3 muestras. De esta forma estamos eliminando genes donde la probabilidad de encontrar diferencias de expresión es muy baja, ya que en estos genes el ruido de Poisson es tan alto por el bajo número de conteos que es mucho más difícil detectar verdaderas diferencias de relevancia biológica. No obstante, de no eliminarlos, tendrían mucha influencia en el resultado final del análisis de expresión diferencial ya que aumentarían sustancialmente el número de test realizados, lo que dificulta la capacidad de alcanzar significancia estadística tras aplicar los métodos de corrección múltiple.
+
+```{r}
+dds <-DGEList(counts=samples_counts, group=samples_targets$Group)
+nrow(dds)
+keep <- rowSums(cpm(dds) >1) >= 3
+dds <- dds[keep, ]
+nrow(dds)
+```
+
+Con este prefiltrado se pasó de tener 56202 a 18960 genes.
+
+### 3.4) Normalización y MDS plot
+Posteriormente se realizó un paso de normalización para tener en cuenta las diferencias en el tamaño de las librerías utilizando la función "calcNormFactors" del paquete "edgR". El MDS plot se realizó utilizando la función "plotMDS" del paquete "limma". 
+
+```{r}
+dds<-calcNormFactors(dds)
+```
+
+### 3.5) Estimación de la dispersión
+Para estimar las dispersiones común y gen-específica se utilizaron las funciones "estimateCommonDisp" y "estimateTagwiseDisp" del paquete "edgR".
+```{r}
+dds <- estimateCommonDisp(dds, verbose=T)
+dds <- estimateTagwiseDisp(dds)
+```
+
+### 3.6) Análisis de expresión diferencial
+Para detectar los genes diferencialmente expresados entre los diferentes grupos de muestras se utilizaron las funciones exactTest y topTags del paquete edgeR. Como método de corrección por comparaciones múltiples se utilizó el método de "Benjamini Hochberg".
+```{r}
+et_NITvsELI <- exactTest(dds, pair = c("ELI", "NIT"))
+res_NITvsELI <- topTags(et_NITvsELI, n=nrow(dds$counts), adjust.method="BH")$table
+
+et_SFIvsELI <- exactTest(dds, pair = c("ELI", "SFI"))
+res_SFIvsELI <- topTags(et_SFIvsELI, n=nrow(dds$counts), adjust.method="BH")$table
+
+et_NITvsSFI <- exactTest(dds, pair = c("SFI", "NIT"))
+res_NITvsSFI <- topTags(et_NITvsSFI, n=nrow(dds$counts), adjust.method="BH")$table
+```
+
+### 3.7) Anotación de los resultados
+
+Para anotar los resultados del análisis de expresión diferencial se utilizaron los paquetes "AnnotationDbi" y "org.Hs.eg.db". Como para dos de los genes no se encontró el símbolo del gen utilizando este procedimiento se decidió anotarlos manualmente. No obstante si el número de genes sin anotar hubiese sido mayor se hubiera considerado utilizar otras herramientas con "bioMart".
+
+```{r warning=FALSE, message=FALSE}
+sig_NITvsELI <- subset(res_NITvsELI, FDR<0.05 & abs(logFC) >1)
+rownames(sig_NITvsELI)<- gsub("\\..*","", rownames(sig_NITvsELI))
+sig_NITvsSFI <- subset(res_NITvsSFI, FDR<0.05 & abs(logFC) >1)
+rownames(sig_NITvsSFI)<- gsub("\\..*","", rownames(sig_NITvsSFI))
+
+library("AnnotationDbi")
+library("org.Hs.eg.db")
+
+
+sig_NITvsELI$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(sig_NITvsELI),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+sig_NITvsELI$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(sig_NITvsELI),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+sig_NITvsELI$symbol[1] <- "MTCO1P12"
+sig_NITvsELI$entrez[1] <-107075141
+
+
+sig_NITvsSFI$symbol <- mapIds(org.Hs.eg.db,
+                     keys=row.names(sig_NITvsSFI),
+                     column="SYMBOL",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+sig_NITvsSFI$entrez <- mapIds(org.Hs.eg.db,
+                     keys=row.names(sig_NITvsSFI),
+                     column="ENTREZID",
+                     keytype="ENSEMBL",
+                     multiVals="first")
+sig_NITvsSFI$symbol[5] <- "MTND1P23 "
+sig_NITvsSFI$symbol[9] <- "MTCO1P12"
+sig_NITvsSFI$entrez[5] <-100887749
+sig_NITvsSFI$entrez[9] <-107075141
+
+```
+
+### 3.8) Representación gráfica de los resultados
+
+Para presentar los datos de una forma más comprensible y resumida, que permita entender su relevancia biológica, se utilizaron diferentes paquetes como "ggplot2" o "VennDiagram".
+
+### 3.9) Análisis de significación biológica
+
+Para determinar la significación biológica de los resultados se decidió hacer un análisis de enriquecimiento. De esta forma se puede identificar si un proceso biológico o vía metabólica aparece con una frecuencia mayor o menor a la esperada en la lista de genes seleccionados que en la población total de genes. Para ello se utilizó la plataforma DAVID (database for annotation, visualization and integrated discovery).
+
+
+## 4) Resultados
+### 4.1) MDS plot
+Para tener una idea preliminar de la estructura de los datos se realizó un "MDS plot".
+```{r}
+plotMDS(dds, pch=1, col=as.numeric(dds$samples$group), labels =dds$samples$group )
+title("MDS plot")
+```
+
+Las muestras no parecen agruparse según el tipo de infiltración, lo cual sugiere que esta variable no es una fuente de variación principal en nuestro set de datos.
+
+### 4.2) Dispersión
+
+La dispersión común estima el coeficiente de variación biológica (o BCV por sus siglas en inglés).
+
+```{r}
+plotBCV(dds, col.tagwise="black")
+```
+
+En este caso la dispersión común es de Disp = 0.31069 y BCV = 0.5574.  Un BCV razonable para un análisis de genes diferencialmente expresados suele estar entre 0.2 y 0.4, en este caso vemos que es considerablemente superior (0.56), por lo que probablemente sea difícil hallar genes diferencialmente expresados.
+En este gráfico también se puede observar que el BCV de genes con baja expresión suele ser mucho más elevado que la dispersión común, como cabe esperar. 
+
+### 4.3) Análisis de genes diferencialmente expresados
+Estamos interesados en conocer los genes cuya expresión cambia entre las diferentes condiciones planteadas en el estudio, por lo que realizamos una selección de genes diferencialmente expresados.
+Se llevaron a cabo tres contrastes diferentes:
+
+- **NITvsELI** 
+- **SFIvsELI** 
+- **NITvsSFI** 
+
+```{r}
+summary(decideTestsDGE(et_NITvsELI, p.value=0.05, lfc=1))
+summary(decideTestsDGE(et_SFIvsELI, p.value=0.05, lfc=1))
+summary(decideTestsDGE(et_NITvsSFI, p.value=0.05, lfc=1))
+```
+De estos tres contrastes solo en dos, NITvsELI y NITvsSFI hemos obtenido genes diferencialmente expresados significativamente (FDR<0.05, abs(log2FC) >1) entre las dos condiciones.
+Hemos obtenido 10 genes que están upregulados (log2FC>1) en las muestras sin infiltraciones (NIT) en comparación con las  muestras con extensa infiltración (ELI), y 9 genes que están upregulados en las muestras sin infiltraciones (NIT) con respecto a las muestras con pequeña infiltración focal (SFI).
+Esto parece sugerir que el grado de infiltración apenas depende de la expresión génica del tejido que está siendo infiltrado, en este caso la tiroides.
+No obstante, aunque las diferencias de expresión génica sean mínimas, en las siguientes secciones intentaremos ver con qué procesos biológicos se relacionan estos genes.
+
+Para representar los genes diferencialmente expresados entre NIT y ELI, y entre NIT y SFI se han realizado "volcano plots" donde :
+
+- Los genes con log2FC mayor o menor a 1 o -1 están marcados en naranja.
+- Los genes con log2FC mayor o menor a 1 o -1 y con FDR < 0.05 están marcados en verde.
+
+```{r}
+plot(res_NITvsELI$logFC, -log10(res_NITvsELI$PValue))
+#abline(h=-log10(0.05), lty="dashed")
+abline(v=c(-1,1), lty="dashed")
+with(subset(res_NITvsELI, abs(logFC)>1), points(logFC, -log10(PValue),
+                                                pch=20, col="orange"))
+with(subset(res_NITvsELI, FDR<.05 & abs(logFC)>1), points(logFC, -log10(PValue),
+                                                          pch=20, col="green"))
+title("Volcano plot NITvsELI")
+```
+
+
+```{r}
+plot(res_NITvsSFI$logFC, -log10(res_NITvsSFI$PValue))
+#abline(h=-log10(0.05), lty="dashed")
+abline(v=c(-1,1), lty="dashed")
+with(subset(res_NITvsSFI, abs(logFC)>1), points(logFC, -log10(PValue),
+                                                pch=20, col="orange"))
+with(subset(res_NITvsSFI, FDR<.05 & abs(logFC)>1), points(logFC, -log10(PValue),
+                                                          pch=20, col="green"))
+title("Volcano plot NITvsSFI")
+```
+
+### 4.3 Comparación entre los distintos contrastes
+Para comprobar si los genes que cambian significativamente su nivel de expresión entre estas tres condiciones coinciden entre sí se decidió hacer un diagrma de Venn.
+```{r}
+sig_NITvsELI2<- subset(res_NITvsELI, FDR<0.05 & abs(logFC)>1)
+sig_NITvsELI_names <- rownames(sig_NITvsELI2)
+sig_NITvsSFI2<- subset(res_NITvsSFI, FDR<0.05 & abs(logFC)>1)
+sig_NITvsSFI_names <- rownames(sig_NITvsSFI2)
+
+comb <- unique(c(sig_NITvsELI_names,sig_NITvsSFI_names))
+
+# Comparing comb with the above two
+NITvsELI <- comb %in% sig_NITvsELI_names
+NITvsSFI <- comb %in% sig_NITvsSFI_names
+
+# Generating venn counts to plot venn diagram
+table_venn <- cbind(NITvsELI, NITvsSFI)
+counts_venn <- vennCounts(table_venn)
+vennDiagram(counts_venn, cex = 1,names = c("NITvsELI","NITvsSFI"), 
+            circle.col = c("red", "blue"))
+title("Genes en común entre ambas comparaciones
+      con FDR < 0.05 and abs(log2FC) > 1")
+```
+6 de los genes diferencialmente expresados son los mismos en ambos contrastes.
+
+### 4.4) Análisis de significación biológica
+Estamos interesados en saber a que rutas metabólicas o en qué procesos biológicos están involucrados esos genes diferencialmente expresados. Con este fin se introdujo la lista de genes en común en ambos contrastes en la plataforma DAVID (database for annotation, visualization and integrated discovery).
+
+![](/Users/Leticia/Desktop/MSc Systems Biology/UOC/Análisis de datos ómicos/PEC2/David.png) 
+
+Los términos más destacados de relacionan con procesos de secreción, reacciones enzimáticas y señalización en el espacio extracelular. No obstante conviene destacar que este tipo de análisis está pensado para listas con muchos más genes, donde suelen ser mucho más eficaces (Subramanian et al., 2005). 
+
+## 5) Discusión 
+Tras el análisis realizado, nuestros datos parecen sugerir que el nivel de infiltración linfática del tejido de la tiroides no depende de los genes que esté expresando este tejido, puesto que el perfil transcripcional de todas nuestras muestras es bastante similar independientemente de la cantidad de infiltración que tengan.  
+Esto podría indicar que las diferencias se encuentran en otros procesos o incluso en otros tejidos:
+
++ La mayor presencia de infiltración podría deberse a un incremento de la producción de metabolitos como la histamina, prostaglandinas o leucotrienos que podría atraería a más células del sistema inmune (Martin et al, 2004). Esta mayor presencia de metabolitos pro-inflamatorios podría no verse en un análisis de expresión diferencial ya que la actividad de las enzimas responsables de producir estos compuestos puede ser regulada a nivel de proteína. Además los pocos genes que hemos encontrado con expresión diferencial parecen estar relacionados con procesos de señalización extracelular.
++ Los distintos niveles de infiltración también podrían deberse a las características de los tejidos colindantes a la tiroides. Si el tejido conectivo próximo tuviese grandes diferencias a nivel transcripcional entre pacientes de los diferentes grupos esto podría haber resultado en una mayor presencia de infiltración en la tiroides.
++ Asimismo el análisis de expresión diferencial podría mejorarse utilizando modelos lineales donde se incluyesen otras variables que potencialmente podrían estar relacionadas con el nivel de infiltración, como la edad o el sexo (Marderstein et al, 2020).
+
+Para poder comprobar cualquiera de las dos hipótesis harían falta toda una serie de experimentos tanto de transcriptómica como a nivel funcional con modelos animales.
+
+Con este tipo de análisis también hemos podido comprobar lo influyente que puede ser el paso de prefiltrado de los datos puesto que en función de los criterios que utilicemos los resultados pueden verse sustancialmente alterados.
+
+
+## 6) Referencias
+
++ Huang DW, Sherman BT, Lempicki RA. Systematic and integrative analysis of large gene lists using DAVID Bioinformatics Resources. Nature Protoc. 2009;4(1):44-57.
++ GTEx Consortium. The Genotype-Tissue Expression (GTEx) project. Nat Genet. 2013;45(6):580‐585. doi:10.1038/ng.2653.
++ Marderstein, A.R., Uppal, M., Verma, A. et al. Demographic and genetic factors influence the abundance of infiltrating immune cells in human tissues. Nat Commun 11, 2213 (2020). https://doi.org/10.1038/s41467-020-16097-9.
++ Martin AP, Coronel EC, Sano G, et al. A novel model for lymphocytic infiltration of the thyroid gland generated by transgenic expression of the CC chemokine CCL21. J Immunol. 2004;173(8):4791‐4798. doi:10.4049/jimmunol.173.8.4791.
